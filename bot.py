@@ -11,6 +11,7 @@ ADMIN_ID = os.environ.get("ADMIN_ID", "")
 BASE = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
 SOURCES = [s.strip() for s in re.split(r"[,\n]", os.environ.get("SOURCES", "")) if s.strip()]
 PER_COUNTRY, TOP_ALL, MAX_TEST = 15, 100, 1500
+BAD = {"IR", "XX"}
 DATA = {}
 
 
@@ -51,4 +52,113 @@ def parse(link):
         host, port = hp.rsplit(":", 1)
         return host.strip("[]"), int(port)
     except Exception:
-        re
+        return None
+
+
+def rename(link, name):
+    if link.startswith("vmess://"):
+        j = json.loads(b64d(link[8:]))
+        j["ps"] = name
+        return "vmess://" + base64.b64encode(json.dumps(j).encode()).decode()
+    return link.split("#")[0] + "#" + quote(name)
+
+
+def flag(cc):
+    if len(cc) == 2:
+        return "".join(chr(0x1F1E6 + ord(c) - 65) for c in cc.upper())
+    return "🏳"
+
+
+async def ping(sem, item):
+    link, host, port = item
+    async with sem:
+        try:
+            loop = asyncio.get_running_loop()
+            infos = await asyncio.wait_for(
+                loop.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM), 4)
+            ip = infos[0][4][0]
+            t = time.perf_counter()
+            _, w = await asyncio.wait_for(asyncio.open_connection(ip, port), 3)
+            ms = int((time.perf_counter() - t) * 1000)
+            w.close()
+            return {"link": link, "ip": ip, "ms": ms}
+        except Exception:
+            return None
+
+
+def geo_batch(ips):
+    out = {}
+    for i in range(0, len(ips), 100):
+        chunk = ips[i:i + 100]
+        try:
+            res = json.loads(http_get(
+                "http://ip-api.com/batch?fields=query,countryCode,status",
+                json.dumps(chunk).encode()))
+            for r in res:
+                if r.get("status") == "success":
+                    out[r["query"]] = r["countryCode"]
+        except Exception as e:
+            print("geo error", e)
+        time.sleep(4.5)
+    return out
+
+
+async def refresh():
+    global DATA
+    print("refresh started, sources:", len(SOURCES))
+    links = set()
+    for url in SOURCES:
+        try:
+            text = await asyncio.to_thread(http_get, url)
+            links.update(extract(text))
+        except Exception as e:
+            print("source error", url, e)
+    items, seen = [], set()
+    for l in links:
+        p = parse(l)
+        if p and p not in seen:
+            seen.add(p)
+            items.append((l, p[0], p[1]))
+    random.shuffle(items)
+    items = items[:MAX_TEST]
+    print("testing", len(items), "configs")
+    sem = asyncio.Semaphore(60)
+    res = [r for r in await asyncio.gather(*[ping(sem, i) for i in items]) if r]
+    res.sort(key=lambda r: r["ms"])
+    res = res[:300]
+    print("alive:", len(res))
+    cmap = await asyncio.to_thread(geo_batch, list({r["ip"] for r in res}))
+    new, allc = {}, []
+    for r in res:
+        cc = cmap.get(r["ip"], "XX")
+        if cc in BAD:
+            continue
+        name = f"{flag(cc)} {cc} | {r['ms']}ms"
+        try:
+            link = rename(r["link"], name)
+        except Exception:
+            continue
+        if len(new.setdefault(cc, [])) < PER_COUNTRY:
+            new[cc].append(link)
+        if len(allc) < TOP_ALL:
+            allc.append(link)
+    new["ALL"] = allc
+    DATA = new
+    print("refresh done:", {k: len(v) for k, v in DATA.items()})
+
+
+async def refresh_loop():
+    while True:
+        try:
+            await refresh()
+        except Exception as e:
+            print("refresh error", e)
+        await asyncio.sleep(1800)
+
+
+class Web(BaseHTTPRequestHandler):
+    def do_GET(self):
+        parts = self.path.split("?")[0].strip("/").split("/")
+        if parts == ["health"] or parts == [""]:
+            body, code = b"ok", 200
+        elif len(par
