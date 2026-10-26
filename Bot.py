@@ -7,7 +7,7 @@ ApplicationBuilder, CommandHandler, MessageHandler,
 ContextTypes, filters,
 )
 
-TOKEN = os.environ["BOT_TOKEN"]
+TOKEN = os.environ[8969028987:AAEdfTtqMze8oHyA80RRyLN-H59T6oK3EHs]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 await update.message.reply_text("سلام! ربات فعاله ✅")
