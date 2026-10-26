@@ -154,11 +154,3 @@ async def refresh_loop():
         except Exception as e:
             print("refresh error", e)
         await asyncio.sleep(1800)
-
-
-class Web(BaseHTTPRequestHandler):
-    def do_GET(self):
-        parts = self.path.split("?")[0].strip("/").split("/")
-        if parts == ["health"] or parts == [""]:
-            body, code = b"ok", 200
-        elif len(par
